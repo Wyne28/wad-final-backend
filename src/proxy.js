@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { verifyJWT } from "./lib/auth";
+import { getAuthenticatedUser } from "./lib/auth";
 import corsHeaders from "./lib/cors";
 import {
   X_HEADER_USER_EMAIL,
@@ -7,33 +7,57 @@ import {
   X_HEADER_USER_NAME,
 } from "./lib/constant";
 
-export function proxy(request) {
-  const user = verifyJWT(request);
+export async function proxy(request) {
+  const user = await getAuthenticatedUser(request);
 
-  if (!user) {
+  // implement the code 
+  // allow browser CORS preflight without authentication
+  if (request.method === "OPTIONS") {
+    return new NextResponse(null, {
+      status: 204, 
+      headers: corsHeaders, 
+    });
+  }
+  const isMutation = ["POST", "PUT", "PATCH", "DELETE"].includes(request.method);
+
+  const origin = request.headers.get("origin");
+  const allowedOrigins = process.env.FONTEND_ORIGINS || "http://localhost:5173";
+
+  if (isMutation && origin && origin !== allowedOrigins) {
     return NextResponse.json(
-      {
-        message: "Unauthorized Request",
-      },
-      {
-        status: 401,
-        headers: corsHeaders,
-      },
+      { message: "Origin not allowed" },
+      { status: 403, headers: corsHeaders },
     );
   }
 
-  const requestHeaders = new Headers(request.headers);
-  requestHeaders.set(X_HEADER_USER_ID, user.id);
-  requestHeaders.set(X_HEADER_USER_EMAIL, user.email);
-  requestHeaders.set(X_HEADER_USER_NAME, user.username);
+  try {
+    const user = await getAuthenticatedUser(request);
 
-  return NextResponse.next({
-    request: {
-      headers: requestHeaders,
-    },
-  });
+    if (!user) {
+      return NextResponse.json(
+        { message: "Authentication required" },
+        { status: 401, headers: corsHeaders },
+      );
+    }
+    const requestHeaders = new Headers(request.headers);
+    requestHeaders.set(X_HEADER_USER_ID, user.id);
+    requestHeaders.set(X_HEADER_USER_EMAIL, user.email);
+    requestHeaders.set(X_HEADER_USER_NAME, user.username);
+
+    return NextResponse.next({
+      request: {
+        headers: requestHeaders,
+      },
+    });
+  } catch (error) {
+    console.error("Proxy authentication failed:", error);
+    return NextResponse.json(
+      { message: "Internal server error" },
+      { status: 500, headers: corsHeaders },
+    );
+  }
 }
 
 export const config = {
-  matcher: [],
+  matcher: ["/api/course/:path*", "/api/user/:path*"],
 };
